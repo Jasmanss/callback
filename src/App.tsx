@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { Attention } from './components/Attention';
 import { Board } from './components/Board';
+import { CloudSync } from './components/CloudSync';
+import { deleteCloudApp, pushApps } from './cloud/api';
+import { cloudEmail } from './cloud/cognito';
+import { fullSync } from './cloud/sync';
 import { Drawer } from './components/Drawer';
 import { EmailSync } from './components/EmailSync';
 import { EmptyState } from './components/EmptyState';
@@ -32,6 +36,8 @@ export default function App() {
   const [editing, setEditing] = useState<Editing>(null);
   const [emailOpen, setEmailOpen] = useState<false | 'gmail' | 'paste'>(false);
   const [syncing, setSyncing] = useState(false);
+  const [cloudOpen, setCloudOpen] = useState(false);
+  const [cloudUser, setCloudUser] = useState<string | null>(() => cloudEmail());
   const [dailyTarget, setDailyTarget] = useState(() => {
     const saved = readPref('dailyTarget');
     if (saved === null) return 10;
@@ -95,6 +101,39 @@ export default function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Cloud sync (opt-in): pull-merge-push once on open / sign-in…
+  useEffect(() => {
+    if (!cloudUser) return;
+    let stopped = false;
+    fullSync(appsRef.current)
+      .then((result) => {
+        if (stopped) return;
+        if (result.changedLocally > 0) {
+          const before = appsRef.current;
+          setApps(result.merged);
+          notify(`Cloud sync: pulled ${plural(result.changedLocally, 'change')} from your other devices`, () =>
+            setApps(before),
+          );
+        }
+      })
+      .catch(() => {
+        // Signed out elsewhere or offline: local mode continues untouched.
+      });
+    return () => {
+      stopped = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cloudUser]);
+
+  // …and push quietly a few seconds after any local change.
+  useEffect(() => {
+    if (!cloudUser) return;
+    const timer = window.setTimeout(() => {
+      pushApps(apps).catch(() => undefined);
+    }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [apps, cloudUser]);
 
   // Applications with 4 months of silence are moved to Ghosted on open (undoable).
   useEffect(() => {
@@ -203,6 +242,7 @@ export default function App() {
     const removed = apps[index];
     setApps((prev) => prev.filter((a) => a.id !== id));
     setEditing(null);
+    if (cloudUser) deleteCloudApp(id).catch(() => undefined);
     notify(`Deleted ${removed.company}`, () =>
       setApps((prev) => [...prev.slice(0, index), removed, ...prev.slice(index)]),
     );
@@ -380,6 +420,16 @@ export default function App() {
                 Import CSV or JSON
                 <small>Adds to your list and skips duplicates</small>
               </button>
+              <button
+                type="button"
+                onClick={() => {
+                  closeMenu();
+                  setCloudOpen(true);
+                }}
+              >
+                Cloud sync & analytics
+                <small>{cloudUser ? `Signed in as ${cloudUser}` : 'Optional — use Callback on more devices'}</small>
+              </button>
               <button type="button" disabled={!apps.length} onClick={() => exportAs('csv')}>
                 Export CSV
                 <small>Opens in Excel, Numbers, or Google Sheets</small>
@@ -449,6 +499,21 @@ export default function App() {
           </>
         )}
       </main>
+
+      {cloudOpen && (
+        <CloudSync
+          apps={apps}
+          onMerged={(merged, changed) => {
+            if (changed > 0) {
+              const before = apps;
+              setApps(merged);
+              notify(`Cloud sync: pulled ${plural(changed, 'change')}`, () => setApps(before));
+            }
+          }}
+          onCloudChange={setCloudUser}
+          onClose={() => setCloudOpen(false)}
+        />
+      )}
 
       {emailOpen && (
         <EmailSync

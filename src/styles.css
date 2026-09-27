@@ -1549,6 +1549,64 @@ dialog.modal::backdrop {
   font-weight: 700;
 }
 
+/* Cloud sync dialog */
+.cloud-auth {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 380px;
+}
+
+.cloud-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.cloud-analytics {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  border-top: 1px solid var(--rule-soft);
+  padding-top: 16px;
+}
+
+.cloud-table h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.cloud-table table {
+  width: 100%;
+  min-width: 0;
+  border-collapse: collapse;
+}
+
+.cloud-table th {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--rule);
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+
+.cloud-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--rule-soft);
+  font-size: 13.5px;
+}
+
+.cloud-disconnect {
+  align-self: flex-start;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+
 .unread-list {
   margin-top: 14px;
   font-size: 13px;

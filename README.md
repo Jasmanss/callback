@@ -60,6 +60,57 @@ npm run build
 
 The static site goes to `dist/`. Every push to `main` deploys it to GitHub Pages through `.github/workflows/deploy.yml`.
 
+## Cloud Sync (optional)
+
+An opt-in AWS serverless backend for two things localStorage can't do: using Callback from more than one device, and analytics over your full application history. **Local-only mode is unaffected** — without opting in, nothing contacts AWS and the app works exactly as described above.
+
+**Status: the code and infrastructure definitions in this repo are complete and tested (unit tests, `cdk synth`), but nothing is deployed anywhere.** Cloud Sync does nothing until *you* deploy the stack to your own AWS account and paste its output into the app.
+
+### Architecture
+
+```
+Browser ──Cognito JWT──▶ API Gateway (HTTP API, JWT authorizer)
+                              │
+                              ▼
+                    Lambda (applications CRUD) ──▶ DynamoDB (1 table, PK=user, SK=app)
+                              │
+                        PutEvents on status change
+                              ▼
+                    EventBridge bus ──rule──▶ SQS ──hourly Lambda──▶ S3 (JSONL, dt= partitions)
+                                                                        │
+Browser ──▶ Lambda (analytics) ──SQL──▶ Athena ──▶ Glue table (partition projection)
+```
+
+- **Cognito** is the only identity system: email + password (10+ chars, email-code confirmation). The DynamoDB partition key is the Cognito `sub`. Google sign-in is a documented next step (add `UserPoolIdentityProviderGoogle` + a hosted UI domain), **not built**.
+- **DynamoDB** stores each application as one item with its history embedded — the only read is "everything for this user", one Query, no GSIs.
+- **EventBridge → SQS → hourly Lambda → S3**: status changes are emitted as events; the queue buffers them (EventBridge routes but doesn't store); the hourly batcher writes one newline-delimited-JSON file per run under `events/dt=YYYY-MM-DD/`. JSONL over Parquet: correct to write with zero dependencies and natively readable by Athena — at this data volume Parquet's scan savings round to zero (tradeoff commented in `backend/src/handlers/batcher.ts`).
+- **Athena + Glue** (partition projection, no crawler) answer the analytics endpoint with real SQL — median days from Applied to first response, grouped by source and by month, always scoped to the caller's verified user id via a bound query parameter.
+- Code layout: `infra/` (CDK, one stack, three constructs), `backend/` (Lambda handlers + Vitest tests), `src/cloud/` (frontend auth/API/sync).
+
+### Deploying it (your AWS account, ~10 minutes)
+
+```bash
+npm install
+npm run check:cloud        # type-checks backend + infra
+npx vitest run backend     # handler tests
+cd infra
+npx cdk bootstrap          # once per account/region (needs AWS credentials configured)
+npx cdk deploy
+```
+
+`cdk deploy` prints a `CloudConfig` output (JSON with `region`, `clientId`, `apiUrl`). In the app: **Data → Cloud sync & analytics**, paste it, create an account, done. Tear everything down with `npx cdk destroy` (the bucket and table are set to delete with the stack — deliberate for a personal project).
+
+### Idle cost
+
+With no traffic: DynamoDB on-demand, Lambda, HTTP API, EventBridge, SQS and Cognito all bill $0 idle. What's left is the hourly batcher (~720 invocations/month — inside the Lambda free tier, and fractions of a cent without it), S3 storage (a few KB/day of events — well under $0.01/month), and CloudWatch log storage (similar). Athena bills $5/TB scanned per query — at this volume, thousandths of a cent per analytics view, with a 1 GB per-query cap set on the workgroup as a backstop. Realistic idle total: **under $0.05/month**. There is deliberately no VPC/NAT (the classic idle-cost trap) and no Glue crawler.
+
+### Known limitations (honest list)
+
+- **No delete tombstones**: deleting an application on device A while device B still holds it can resurrect it when B pushes. Fixing this means storing tombstones — a reasonable next step, not built.
+- **Analytics lag**: events reach S3 on the hourly batch, so the analytics view trails reality by up to an hour.
+- **Sync is last-write-wins per application** by `updatedAt` — simultaneous edits to the same application on two devices keep the newer save.
+- The Athena query polls up to ~20 s; a cold query that runs longer returns a retry message rather than an answer.
+
 ## Tech
 
 React 19, TypeScript, Vite. No UI or state libraries.
